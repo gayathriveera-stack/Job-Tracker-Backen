@@ -209,7 +209,6 @@ function parseJobEmail(headers) {
   let status = "Applied";
   const s = subject.toLowerCase();
   if (/interview|schedule|invited|slot/i.test(s)) status = "Interview";
-  else if (/offer|congratulations|pleased to inform|selected/i.test(s)) status = "Offer";
   else if (/regret|not moving forward|not selected|unfortunately|declined/i.test(s)) status = "Rejected";
   else if (!/appli|thank you for applying|received your|application confirm/i.test(s)) return null; // not a job email
 
