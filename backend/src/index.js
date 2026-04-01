@@ -147,7 +147,7 @@ async function scanGmailForUser(user) {
 
   // Search for job-related emails (last 90 days)
   const query = [
-    "subject:(application OR applied OR interview OR offer OR rejected OR shortlisted OR assessment)",
+    "subject:(naukri OR applied OR interview OR rejected OR shortlisted)",
     "newer_than:90d",
   ].join(" ");
 
