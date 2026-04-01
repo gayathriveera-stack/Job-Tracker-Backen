@@ -147,9 +147,13 @@ async function scanGmailForUser(user) {
 
   // Search for job-related emails (last 90 days)
   const query = [
-    "subject:(naukri OR applied OR interview OR rejected OR shortlisted)",
-    "newer_than:90d",
-  ].join(" ");
+  "(in:inbox OR in:sent)",
+  "-category:promotions",
+  "-category:social",
+  "-category:updates",
+  "subject:(application OR applied OR interview OR offer OR rejected OR shortlisted OR assessment)",
+  "newer_than:90d",
+].join(" ");
 
   const { data: listData } = await gmail.users.messages.list({
     userId: "me",
