@@ -151,7 +151,7 @@ async function scanGmailForUser(user) {
   "-category:promotions",
   "-category:social",
   "-category:updates",
-  "subject:(application OR applied OR interview OR rejected OR shortlisted)",
+  "subject:(received application OR applied OR interview OR rejected OR shortlisted OR you applied)",
   "newer_than:90d",
 ].join(" ");
 
