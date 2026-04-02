@@ -151,7 +151,7 @@ async function scanGmailForUser(user) {
   "-category:promotions",
   "-category:social",
   "-category:updates",
-  "subject:(received application OR applied OR interview OR rejected OR shortlisted OR you applied)",
+  "subject:(application OR applied OR interview OR rejected)",
   "newer_than:90d",
 ].join(" ");
 
@@ -203,24 +203,69 @@ async function scanGmailForUser(user) {
 function parseJobEmail(headers) {
   const subject = headers["subject"] || "";
   const from = headers["from"] || "";
-  const date = headers["date"] ? new Date(headers["date"]).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10);
-
-  // Determine status from subject keywords
-  let status = "Applied";
   const s = subject.toLowerCase();
-  if (/interview|schedule|invited|slot/i.test(s)) status = "Interview";
-  else if (/regret|not moving forward|not selected|unfortunately|declined/i.test(s)) status = "Rejected";
-  else if (!/appli|thank you for applying|received your|application confirm/i.test(s)) return null; // not a job email
 
-  // Extract company name from sender
+  // ❌ Step 1: Reject obvious non-job emails
+  const negativeKeywords = [
+    "github", "password", "otp", "verify", "account",
+    "subscription", "payment", "invoice", "order", "welcome"
+  ];
+
+  if (negativeKeywords.some(k => s.includes(k))) return null;
+
+  // ✅ Step 2: Detect job context
+  const isJobContext =
+    /job|role|position|application|career|hiring/i.test(subject) ||
+    /linkedin|naukri|indeed|careers|jobs/i.test(from);
+
+  if (!isJobContext) return null;
+
+  // ✅ Step 3: Classify ONLY what you care about
+
+  let status = null;
+
+  // 🎯 Application (you applied)
+  if (/applied|application received|thank you for applying/i.test(s)) {
+    status = "Applied";
+  }
+
+  // 🎯 Interview
+  else if (/interview|schedule|invited|assessment|next round/i.test(s)) {
+    status = "Interview";
+  }
+
+  // 🎯 Rejection
+  else if (/regret|not selected|not moving forward|unfortunately|declined/i.test(s)) {
+    status = "Rejected";
+  }
+
+  // ❌ Ignore everything else (including offers)
+  else {
+    return null;
+  }
+
+  const date = headers["date"]
+    ? new Date(headers["date"]).toISOString().slice(0, 10)
+    : new Date().toISOString().slice(0, 10);
+
   const companyMatch = from.match(/^"?([^"<]+)"?\s*</);
-  const company = companyMatch ? companyMatch[1].trim().replace(/\s*(careers|recruiting|hr|noreply|no-reply|talent).*$/i, "").trim() : from.split("@")[1]?.split(".")[0] || "Unknown";
+  const company = companyMatch
+    ? companyMatch[1].trim()
+    : from.split("@")[1]?.split(".")[0] || "Unknown";
 
-  // Extract role from subject
-  const roleMatch = subject.match(/(?:for\s+(?:the\s+)?|position[:\s]+|role[:\s]+)([A-Za-z\s]+?)(?:\s+at\s+|\s+position|\s+role|$)/i);
-  const role = roleMatch ? roleMatch[1].trim() : subject.replace(/re:|fwd:|your application|application for|thank you|interview/gi, "").trim().slice(0, 60) || "Unknown Role";
+  const role = subject
+    .replace(/re:|fwd:/gi, "")
+    .replace(/application|applied|interview|thank you/gi, "")
+    .trim()
+    .slice(0, 60) || "Unknown Role";
 
-  return { company, role, applied_date: date, status, source: "Gmail" };
+  return {
+    company,
+    role,
+    applied_date: date,
+    status,
+    source: "Gmail",
+  };
 }
 
 // ── Cron: scan all users every 6 hours ────────────────────────────────────────
