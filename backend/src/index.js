@@ -100,11 +100,7 @@ app.post("/sync/:userId", async (req, res) => {
 // ── KNOWN JOB PLATFORM DOMAINS ────────────────────────────────────────────────
 const JOB_PLATFORM_DOMAINS = [
   "linkedin.com", "indeed.com", "naukri.com",
-  "greenhouse.io", "lever.co", "workday.com",
-  "employmenthero.com", "smartrecruiters.com",
-  "jobvite.com", "taleo.net", "icims.com",
-  "myworkdayjobs.com", "successfactors.com",
-  "bamboohr.com", "ashbyhq.com", "rippling.com",
+  "employmenthero.com", "myworkdayjobs.com", "successfactors.com",
 ];
 
 function isFromJobPlatform(from) {
@@ -122,7 +118,7 @@ function classifyBySubject(subject, from) {
   if (isFromJobPlatform(from)) {
     // Only allow clear application-related subjects from these platforms
     // This blocks security emails, digests, job alerts from linkedin/indeed etc.
-    if (/your application|you applied|application received|application submitted|we received your|thank you for applying|interview|offer letter|rejected|not selected|unfortunately|next step|assessment result/i.test(s)) {
+    if (/your application|you applied|application received|application submitted|we received your|thank you for applying|interview with|offer letter|rejected|not selected|unfortunately|next step|assessment result/i.test(s)) {
       return "tier1";
     }
     return null; // from a job platform but not an application email (e.g. security, digest)
@@ -133,7 +129,7 @@ function classifyBySubject(subject, from) {
   if (/you applied/i.test(s)) return "tier2";
   if (/we(?:'ve| have) received your/i.test(s)) return "tier2";
   if (/thank you for applying/i.test(s)) return "tier2";
-  if (/your interview|you for an? interview|interview with/i.test(s)) return "tier2";
+  if (/your interview|you for interview|interview with/i.test(s)) return "tier2";
   if (/unfortunately.*\b(you|your)\b|\b(you|your)\b.*unfortunately/i.test(s)) return "tier2";
   if (/not moving forward with your|not been selected for/i.test(s)) return "tier2";
   if (/update on your application/i.test(s)) return "tier2";
