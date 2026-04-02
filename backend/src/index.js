@@ -174,7 +174,7 @@ function parseJobEmail(headers, body = "") {
   const from = headers["from"] || "";
 
   // ❌ Remove duplicates
-  if (/^re:|^fwd:/i.test(subject)) return null;
+  if (/^fwd:/i.test(subject)) return null;
 
   const text = (subject + " " + body).toLowerCase();
   const f = from.toLowerCase();
