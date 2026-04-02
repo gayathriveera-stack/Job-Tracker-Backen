@@ -180,8 +180,7 @@ if (/job\s*\|/i.test(subject)) return null;
 // ❌ Ignore USYD mails
 if (/Admissions\s*/i.test(subject)) return null;
   if (/emba\s*&\s*mba\s*alumni\s*invitation/i.test(subject)) return null;
-
-  
+if (/Admission\s*/i.test(subject)) return null;
   
   // ✅ Accept if job-like
   const isJobEmail =
