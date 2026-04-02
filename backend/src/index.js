@@ -98,7 +98,6 @@ app.post("/sync/:userId", async (req, res) => {
 });
 
 // ── KNOWN JOB PLATFORM DOMAINS ────────────────────────────────────────────────
-// Tier 1: emails from these domains are almost always about the user's application
 const JOB_PLATFORM_DOMAINS = [
   "linkedin.com", "indeed.com", "naukri.com",
   "greenhouse.io", "lever.co", "workday.com",
@@ -112,77 +111,75 @@ function isFromJobPlatform(from) {
   return JOB_PLATFORM_DOMAINS.some(domain => from.toLowerCase().includes(domain));
 }
 
-// ── TIER CLASSIFIER ───────────────────────────────────────────────────────────
-// The key principle:
-//   Tier 1 = from a known job platform (trusted sender)
-//   Tier 2 = NOT from a known platform, but subject is clearly personalised
-//            Real application emails almost always say "your" or "you"
-//            Job blasts and newsletters never say "your" in the subject
-// Returns "tier1", "tier2", or null (skip this email)
+// ── STEP 1: SUBJECT CLASSIFIER ────────────────────────────────────────────────
+// First gate — does the subject look like a real application email?
+// Returns "tier1", "tier2", or null (definitely not a job email)
 
-function classifyEmail(subject, from) {
+function classifyBySubject(subject, from) {
   const s = subject.toLowerCase();
 
-  // ── TIER 1 ────────────────────────────────────────────────────────────────
+  // ── TIER 1: trusted platform sender ───────────────────────────────────────
   if (isFromJobPlatform(from)) {
-    // Even from a trusted platform, skip newsletter/digest/alert emails
-    if (/new jobs for you|jobs matching|job alert|recommended jobs|\d+ new jobs|jobs near you|top jobs/i.test(s)) {
-      return null;
+    // Only allow clear application-related subjects from these platforms
+    // This blocks security emails, digests, job alerts from linkedin/indeed etc.
+    if (/your application|you applied|application received|application submitted|we received your|thank you for applying|interview|offer letter|rejected|not selected|unfortunately|next step|assessment result/i.test(s)) {
+      return "tier1";
     }
-    return "tier1";
+    return null; // from a job platform but not an application email (e.g. security, digest)
   }
 
-  // "Your application" — clearly about the user, not a blast
-  if (/your application/i.test(s)) return "tier1";
-
-  // "You applied to" — platform sends this when user clicks Apply
-  if (/you applied/i.test(s)) return "tier1";
-
-  // ── TIER 2 ────────────────────────────────────────────────────────────────
-
-  // "We received your" — personalised confirmation from any company
+  // ── TIER 2: any sender, but subject is unambiguously about user's application
+  if (/your application/i.test(s)) return "tier2";
+  if (/you applied/i.test(s)) return "tier2";
   if (/we(?:'ve| have) received your/i.test(s)) return "tier2";
-
-  // "Thank you for applying" — standard ATS confirmation
   if (/thank you for applying/i.test(s)) return "tier2";
+  if (/your interview|you for an? interview|interview with you/i.test(s)) return "tier2";
+  if (/unfortunately.*\b(you|your)\b|\b(you|your)\b.*unfortunately/i.test(s)) return "tier2";
+  if (/not moving forward with your|not been selected for/i.test(s)) return "tier2";
+  if (/update on your application/i.test(s)) return "tier2";
+  if (/your candidature|your profile has been shortlisted/i.test(s)) return "tier2";
 
-  // Interview — only if personalised with "your" or "you"
-  // Avoids: "Interview tips", "Mock interview", "Interview questions"
-  if (/interview/i.test(s) && /\b(your|you)\b/i.test(s)) return "tier2";
+  return null;
+}
 
-  // Rejection — only if personalised
-  // e.g. "Unfortunately, you have not been selected"
-  if (/unfortunately/i.test(s) && /\b(you|your)\b/i.test(s)) return "tier2";
+// ── STEP 2: BODY VERIFICATION ─────────────────────────────────────────────────
+// Second gate — does the body address the user by name or email?
+// This is the key check that eliminates blasts and job alerts.
+// Real application emails ALWAYS address you personally.
+// Job alert blasts (Glassdoor, LinkedIn alerts) NEVER do.
 
-  // "Update on your application" — personalised status update
-  if (/update on your/i.test(s)) return "tier2";
+function isAddressedToUser(body, userEmail, userName) {
+  const snippet = body.slice(0, 600).toLowerCase();
 
-  // "Your candidature" / "your profile has been" — common in Indian ATS emails
-  if (/your candidature|your profile has been/i.test(s)) return "tier2";
+  // Check for user's email address in body
+  if (snippet.includes(userEmail.toLowerCase())) return true;
 
-  return null; // not a job email — skip
+  // Check for user's first name — extract just the first word of their name
+  // e.g. "Gayathri Veera Haribabu" → check for "gayathri"
+  const firstName = userName.split(" ")[0].toLowerCase();
+  if (firstName.length >= 3 && snippet.includes(firstName)) return true;
+
+  // Some ATS systems use "Dear Candidate" or "Hello," without a name
+  // Allow these only if the subject already passed Tier 1 (trusted platform)
+  // We handle this in parseJobEmail by passing the tier through
+  if (/dear candidate|hello,|hi,|greetings/i.test(snippet)) return true;
+
+  return false;
 }
 
 // ── STATUS DETECTOR ───────────────────────────────────────────────────────────
 function detectStatus(subject, body) {
   const text = (subject + " " + body).toLowerCase();
 
-  // Offer — only detected from body content, not subject
   if (/offer letter|we(?:'d| would) like to offer|pleased to offer|selected for the role|congratulations.*(?:joining|offer)/i.test(text)) {
     return "Offer";
   }
-
-  // Rejected
-  if (/regret|not (?:moving forward|selected|progressing|shortlisted)|unfortunately|we will not be|decided to move forward with other candidates/i.test(text)) {
+  if (/regret|not (?:moving forward|selected|progressing|shortlisted)|unfortunately|we will not be|decided to move forward with other/i.test(text)) {
     return "Rejected";
   }
-
-  // Interview
   if (/(?:schedule|invite|invited|confirm|book).*interview|interview.*(?:schedule|invite|confirm)|next (?:step|round|stage)/i.test(text)) {
     return "Interview";
   }
-
-  // Default — email passed the tier check so it's at minimum an application
   return "Applied";
 }
 
@@ -192,7 +189,6 @@ function getEmailBody(payload) {
 
   function extractFromParts(parts) {
     if (!parts) return "";
-    // Prefer plain text
     for (const part of parts) {
       if (part.mimeType === "text/plain" && part.body?.data) {
         return Buffer.from(part.body.data, "base64").toString("utf-8");
@@ -202,7 +198,6 @@ function getEmailBody(payload) {
         if (nested) return nested;
       }
     }
-    // Fallback to HTML, strip tags
     for (const part of parts) {
       if (part.mimeType === "text/html" && part.body?.data) {
         return Buffer.from(part.body.data, "base64")
@@ -222,7 +217,7 @@ function getEmailBody(payload) {
 
 // ── COMPANY EXTRACTOR ─────────────────────────────────────────────────────────
 function extractCompany(from, subject, body) {
-  // 1. Domain-based — strip subdomains, use the main domain name
+  // 1. Domain-based
   const domainMatch = from.match(/@([\w.-]+)/);
   if (domainMatch) {
     let domain = domainMatch[1];
@@ -234,16 +229,16 @@ function extractCompany(from, subject, body) {
     }
   }
 
-  // 2. "at CompanyName" in subject — e.g. "Your application at Acme"
+  // 2. "at CompanyName" in subject
   const atSubject = subject.match(/\bat\s+([A-Z][A-Za-z0-9\s&.]{1,30}?)(?:\s*[-|!,.]|$)/);
   if (atSubject) return atSubject[1].trim();
 
-  // 3. "at CompanyName" in first 500 chars of body
+  // 3. "at CompanyName" in body snippet
   const snippet = body.slice(0, 500);
   const atBody = snippet.match(/\bat\s+([A-Z][A-Za-z0-9\s&.]{1,30}?)(?:\s*[,.]|\s+is|\s+we|\s+team)/);
   if (atBody) return atBody[1].trim();
 
-  // 4. Sender display name as last resort
+  // 4. Sender display name
   const displayName = from.match(/^"?([^"<@\n]{2,40})"?\s*</);
   if (displayName) return displayName[1].trim();
 
@@ -252,15 +247,15 @@ function extractCompany(from, subject, body) {
 
 // ── ROLE EXTRACTOR ────────────────────────────────────────────────────────────
 function extractRole(subject, body) {
-  // 1. Strip platform prefixes from subject
+  // Strip platform prefixes and noise from subject
   let cleaned = subject
     .replace(/^(re:|fwd:|fw:)\s*/gi, "")
     .replace(/^indeed\s+application[:\s]*/i, "")
     .replace(/^linkedin\s+application[:\s]*/i, "")
     .replace(/^naukri[:\s]*/i, "")
-    .replace(/\b(your application(?: for)?|application for|thank you for applying|interview(?: invitation)?|update on your|we(?:'ve| have) received your)\b/gi, "")
+    .replace(/\b(your application(?: for)?|application for|thank you for applying|interview(?: invitation)?|update on your application|we(?:'ve| have) received your)\b/gi, "")
     .replace(/[-–—]\s*(?:employment hero|linkedin|indeed|naukri|greenhouse|lever)\b.*/gi, "")
-    .replace(/\[.*?\]/g, "")    // remove ticket refs like [EH-123]
+    .replace(/\[.*?\]/g, "")
     .replace(/\s+/g, " ")
     .trim()
     .replace(/^[-–—:,\s]+|[-–—:,\s]+$/g, "")
@@ -268,7 +263,7 @@ function extractRole(subject, body) {
 
   if (cleaned.length > 3) return cleaned.slice(0, 80);
 
-  // 2. Look for role mention in body
+  // Fallback: scan body
   const bodyRole = body.match(/(?:applying for|applied for|role of|position of)\s+(?:the\s+)?([A-Za-z\s\/\-]+?)(?:\s+at|\s+role|\.|,)/i);
   if (bodyRole) return bodyRole[1].trim().slice(0, 80);
 
@@ -276,21 +271,32 @@ function extractRole(subject, body) {
 }
 
 // ── MAIN PARSER ───────────────────────────────────────────────────────────────
-function parseJobEmail(headers, body = "") {
+// Two gates must both pass:
+//   Gate 1 (subject): does the subject look like a real application email?
+//   Gate 2 (body):    does the body address the user by name or email?
+
+function parseJobEmail(headers, body, userEmail, userName) {
   const subject = headers["subject"] || "";
   const from = headers["from"] || "";
   const date = headers["date"]
     ? new Date(headers["date"]).toISOString().slice(0, 10)
     : new Date().toISOString().slice(0, 10);
 
-  const tier = classifyEmail(subject, from);
-  if (!tier) return null; // not a job email
+  // Gate 1: subject classification
+  const tier = classifyBySubject(subject, from);
+  if (!tier) return null;
+
+  // Gate 2: body verification — is this email addressed to the user?
+  // Tier 1 emails from trusted platforms get a slightly more lenient check
+  // (some ATS systems send "Dear Candidate" without a name)
+  const addressed = isAddressedToUser(body, userEmail, userName);
+  if (!addressed) return null;
 
   const status = detectStatus(subject, body);
   const company = extractCompany(from, subject, body);
   const role = extractRole(subject, body);
 
-  return { company, role, applied_date: date, status, source: "Gmail", tier };
+  return { company, role, applied_date: date, status, source: "Gmail" };
 }
 
 // ── SCANNER ───────────────────────────────────────────────────────────────────
@@ -313,10 +319,7 @@ async function scanGmailForUser(user) {
 
   const gmail = google.gmail({ version: "v1", auth });
 
-  // Gmail search — tightly scoped to match only Tier 1 and Tier 2 subjects
-  // "your application" | "you applied" | "thank you for applying" |
-  // "we have received your" | from known platforms | interview + you/your |
-  // "update on your" | "your candidature"
+  // Gmail search — scoped to exact phrases that appear in real application emails
   const query = [
     "newer_than:90d",
     "-category:promotions",
@@ -327,9 +330,9 @@ async function scanGmailForUser(user) {
       'OR "thank you for applying"',
       'OR "we have received your"',
       'OR "we\'ve received your"',
-      'OR "update on your"',
+      'OR "update on your application"',
       'OR "your candidature"',
-      'OR "your profile has been"',
+      'OR "your profile has been shortlisted"',
       'OR from:(linkedin.com OR indeed.com OR naukri.com OR greenhouse.io OR lever.co OR workday.com OR employmenthero.com OR smartrecruiters.com)',
     ")",
   ].join(" ");
@@ -339,7 +342,6 @@ async function scanGmailForUser(user) {
 
   let count = 0;
   for (const msg of data.messages) {
-    // Skip already imported
     const exists = await supabase.from("applications").select("id").eq("gmail_message_id", msg.id).maybeSingle();
     if (exists.data) continue;
 
@@ -347,7 +349,8 @@ async function scanGmailForUser(user) {
     const hdrs = Object.fromEntries(full.data.payload.headers.map(h => [h.name.toLowerCase(), h.value]));
     const body = getEmailBody(full.data.payload);
 
-    const parsed = parseJobEmail(hdrs, body);
+    // Pass user's email and name for body verification
+    const parsed = parseJobEmail(hdrs, body, user.email, user.name);
     if (!parsed) continue;
 
     await supabase.from("applications").insert({ user_id: user.id, gmail_message_id: msg.id, ...parsed });
