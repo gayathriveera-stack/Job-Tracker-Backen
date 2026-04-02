@@ -217,8 +217,10 @@ function parseJobEmail(headers) {
 
   // ✅ Step 2: Strong job signal required
   const hasJobSignal =
-    /job|role|position|career|hiring/i.test(subject) ||
-    /linkedin|naukri|indeed|greenhouse|lever|workday|careers/i.test(from);
+  /application|applied|interview|job|role|position/i.test(s) ||
+  /linkedin|naukri|indeed|greenhouse|lever|workday|careers/i.test(f);
+
+if (!hasJobSignal) return null;
 
   if (!hasJobSignal) return null;
 
