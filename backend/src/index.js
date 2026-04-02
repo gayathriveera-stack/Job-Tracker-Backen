@@ -204,44 +204,42 @@ function parseJobEmail(headers) {
   const subject = headers["subject"] || "";
   const from = headers["from"] || "";
   const s = subject.toLowerCase();
+  const f = from.toLowerCase();
 
-  // ❌ Step 1: Reject obvious non-job emails
+  // ❌ Step 1: HARD REJECTION (non-job emails)
   const negativeKeywords = [
-    "github", "password", "otp", "verify", "account",
-    "subscription", "payment", "invoice", "order", "welcome"
+    "github", "otp", "verify", "password", "account",
+    "subscription", "payment", "invoice", "order",
+    "discount", "sale", "offer", "premium", "upgrade"
   ];
 
   if (negativeKeywords.some(k => s.includes(k))) return null;
 
-  // ✅ Step 2: Detect job context
-  const isJobContext =
-    /job|role|position|application|career|hiring/i.test(subject) ||
-    /linkedin|naukri|indeed|careers|jobs/i.test(from);
+  // ✅ Step 2: Strong job signal required
+  const hasJobSignal =
+    /job|role|position|career|hiring/i.test(subject) ||
+    /linkedin|naukri|indeed|greenhouse|lever|workday|careers/i.test(from);
 
-  if (!isJobContext) return null;
+  if (!hasJobSignal) return null;
 
-  // ✅ Step 3: Classify ONLY what you care about
+  // ✅ Step 3: Only allow 3 statuses
 
   let status = null;
 
-  // 🎯 Application (you applied)
   if (/applied|application received|thank you for applying/i.test(s)) {
     status = "Applied";
   }
 
-  // 🎯 Interview
   else if (/interview|schedule|invited|assessment|next round/i.test(s)) {
     status = "Interview";
   }
 
-  // 🎯 Rejection
   else if (/regret|not selected|not moving forward|unfortunately|declined/i.test(s)) {
     status = "Rejected";
   }
 
-  // ❌ Ignore everything else (including offers)
   else {
-    return null;
+    return null; // ❌ ignore everything else
   }
 
   const date = headers["date"]
