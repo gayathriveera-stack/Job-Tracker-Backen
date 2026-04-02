@@ -173,6 +173,13 @@ function parseJobEmail(headers, body = "") {
 
   // ❌ Ignore job alert emails
 if (/jobs\s*\|/i.test(subject)) return null;
+
+  // ❌ Ignore job alert emails
+if (/job\s*\|/i.test(subject)) return null;
+
+// ❌ Ignore USYD mails
+if (/Admissions\s*/i.test(subject)) return null;
+  
   
   // ✅ Accept if job-like
   const isJobEmail =
