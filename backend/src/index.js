@@ -14,14 +14,14 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_KEY
 );
 
-// ── OAuth2 ─────────────────────────────────────────────────
+// ── OAuth ─────────────────────────────────────────
 const oauth2Client = new google.auth.OAuth2(
   process.env.GOOGLE_CLIENT_ID,
   process.env.GOOGLE_CLIENT_SECRET,
   process.env.GOOGLE_REDIRECT_URI
 );
 
-// ── Auth ───────────────────────────────────────────────────
+// ── AUTH ─────────────────────────────────────────
 app.get("/auth/google", (req, res) => {
   const url = oauth2Client.generateAuthUrl({
     access_type: "offline",
@@ -73,7 +73,7 @@ app.get("/auth/callback", async (req, res) => {
   }
 });
 
-// ── CRUD ───────────────────────────────────────────────────
+// ── CRUD ─────────────────────────────────────────
 app.get("/applications/:userId", async (req, res) => {
   const { data } = await supabase
     .from("applications")
@@ -110,7 +110,7 @@ app.delete("/applications/:id", async (req, res) => {
   res.json({ success: true });
 });
 
-// ── Sync ───────────────────────────────────────────────────
+// ── SYNC ─────────────────────────────────────────
 app.post("/sync/:userId", async (req, res) => {
   try {
     const { data: user } = await supabase
@@ -127,7 +127,87 @@ app.post("/sync/:userId", async (req, res) => {
   }
 });
 
-// ── Gmail Scanner ───────────────────────────────────────────
+// ── EMAIL BODY EXTRACTOR ─────────────────────────
+function getEmailBody(payload) {
+  if (!payload) return "";
+
+  if (payload.parts) {
+    for (const part of payload.parts) {
+      if (part.mimeType === "text/plain" && part.body?.data) {
+        return Buffer.from(part.body.data, "base64").toString("utf-8");
+      }
+    }
+  }
+
+  if (payload.body?.data) {
+    return Buffer.from(payload.body.data, "base64").toString("utf-8");
+  }
+
+  return "";
+}
+
+// ── PARSER ───────────────────────────────────────
+function parseJobEmail(headers, body = "") {
+  const subject = headers["subject"] || "";
+  const from = headers["from"] || "";
+
+  const text = (subject + " " + body).toLowerCase();
+  const f = from.toLowerCase();
+
+  // ❌ Ignore junk
+  if (/github|otp|password|invoice|payment|order|discount|sale/i.test(text)) {
+    return null;
+  }
+
+  // ✅ Job signal (subject OR body)
+  if (
+    !(/application|applied|interview|assessment|candidate/i.test(text) ||
+      /linkedin|indeed|naukri|greenhouse|lever|workday|employmenthero/i.test(f))
+  ) {
+    return null;
+  }
+
+  // ✅ Status detection
+  let status = null;
+
+  if (/applied|application received|received your application|thank you for applying/i.test(text)) {
+    status = "Applied";
+  } 
+  else if (/interview|schedule|invited|assessment|next round/i.test(text)) {
+    status = "Interview";
+  } 
+  else if (/regret|not selected|not moving forward|unfortunately|declined/i.test(text)) {
+    status = "Rejected";
+  } 
+  else {
+    return null;
+  }
+
+  // ✅ Company from domain
+  const domainMatch = from.match(/@([\w.-]+)/);
+  let company = "Unknown";
+
+  if (domainMatch) {
+    company = domainMatch[1].split(".")[0];
+    company = company.charAt(0).toUpperCase() + company.slice(1);
+  }
+
+  const date = headers["date"]
+    ? new Date(headers["date"]).toISOString().slice(0, 10)
+    : new Date().toISOString().slice(0, 10);
+
+  const role = subject.slice(0, 60);
+
+  return {
+    company,
+    role,
+    applied_date: date,
+    status,
+    source: "Gmail",
+  };
+}
+
+// ── GMAIL SCANNER ───────────────────────────────
 async function scanGmailForUser(user) {
   const auth = new google.auth.OAuth2(
     process.env.GOOGLE_CLIENT_ID,
@@ -173,15 +253,16 @@ async function scanGmailForUser(user) {
     const full = await gmail.users.messages.get({
       userId: "me",
       id: msg.id,
-      format: "metadata",
-      metadataHeaders: ["From", "Subject", "Date"],
+      format: "full",
     });
 
     const headers = Object.fromEntries(
       full.data.payload.headers.map(h => [h.name.toLowerCase(), h.value])
     );
 
-    const parsed = parseJobEmail(headers);
+    const body = getEmailBody(full.data.payload);
+
+    const parsed = parseJobEmail(headers, body);
     if (!parsed) continue;
 
     await supabase.from("applications").insert({
@@ -196,64 +277,7 @@ async function scanGmailForUser(user) {
   return count;
 }
 
-// ── Parser (CLEAN + SIMPLE) ─────────────────────────────────
-function parseJobEmail(headers) {
-  const subject = headers["subject"] || "";
-  const from = headers["from"] || "";
-  const s = subject.toLowerCase();
-  const f = from.toLowerCase();
-
-  // ❌ Ignore obvious junk
-  if (/github|otp|password|invoice|payment|order|discount|sale/i.test(s)) {
-    return null;
-  }
-
-  // ✅ Must contain job-related signal
-  if (
-    !(/application|applied|interview|job/i.test(s) ||
-      /linkedin|indeed|naukri|greenhouse|lever|workday|employmenthero/i.test(f))
-  ) {
-    return null;
-  }
-
-  // ✅ Status detection
-  let status = null;
-
-  if (/applied|application|thank you for applying|received your application/i.test(s)) {
-    status = "Applied";
-  } else if (/interview|schedule|invited|assessment|next round/i.test(s)) {
-    status = "Interview";
-  } else if (/regret|not selected|not moving forward|unfortunately|declined/i.test(s)) {
-    status = "Rejected";
-  } else {
-    return null;
-  }
-
-  // ✅ Company from domain
-  const domainMatch = from.match(/@([\w.-]+)/);
-  let company = "Unknown";
-
-  if (domainMatch) {
-    company = domainMatch[1].split(".")[0];
-    company = company.charAt(0).toUpperCase() + company.slice(1);
-  }
-
-  const date = headers["date"]
-    ? new Date(headers["date"]).toISOString().slice(0, 10)
-    : new Date().toISOString().slice(0, 10);
-
-  const role = subject.slice(0, 60);
-
-  return {
-    company,
-    role,
-    applied_date: date,
-    status,
-    source: "Gmail",
-  };
-}
-
-// ── Cron ───────────────────────────────────────────────────
+// ── CRON ────────────────────────────────────────
 cron.schedule("0 */6 * * *", async () => {
   const { data: users } = await supabase.from("users").select("*");
 
@@ -262,6 +286,6 @@ cron.schedule("0 */6 * * *", async () => {
   }
 });
 
-// ── Server ─────────────────────────────────────────────────
+// ── SERVER ──────────────────────────────────────
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => console.log(`Server running on ${PORT}`));
