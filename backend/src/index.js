@@ -171,6 +171,9 @@ function parseJobEmail(headers, body = "") {
     return null;
   }
 
+  // ❌ Ignore job alert emails
+if (/jobs\s*\|/i.test(subject)) return null;
+  
   // ✅ Accept if job-like
   const isJobEmail =
     /application|applied|interview|role|position|job/i.test(text);
