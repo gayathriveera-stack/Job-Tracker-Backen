@@ -133,7 +133,7 @@ function classifyBySubject(subject, from) {
   if (/you applied/i.test(s)) return "tier2";
   if (/we(?:'ve| have) received your/i.test(s)) return "tier2";
   if (/thank you for applying/i.test(s)) return "tier2";
-  if (/your interview|you for an? interview|interview with you/i.test(s)) return "tier2";
+  if (/your interview|you for an? interview|interview with/i.test(s)) return "tier2";
   if (/unfortunately.*\b(you|your)\b|\b(you|your)\b.*unfortunately/i.test(s)) return "tier2";
   if (/not moving forward with your|not been selected for/i.test(s)) return "tier2";
   if (/update on your application/i.test(s)) return "tier2";
