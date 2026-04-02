@@ -165,18 +165,26 @@ function extractCompany(from, subject, body) {
 
 // ── ROLE EXTRACTOR ────────────────────────────────────────────────────────────
 function extractRole(subject, body) {
-  // 1. "Role: X" or "Position: X" patterns
+  // 1. "Role: X" or "Position: X" patterns in body
   const labeled = body.match(/(?:role|position|job title|opening)[:\s]+([A-Za-z\s\/\-]+?)(?:\n|\.|\bat\b)/i);
   if (labeled) return labeled[1].trim().slice(0, 80);
 
-  // 2. Subject line — strip noise words
-  const cleaned = subject
+  // 2. Strip platform prefixes from subject — e.g. "Indeed Application: People Operations Director"
+  let cleaned = subject
     .replace(/^(re:|fwd:|fw:)\s*/gi, "")
-    .replace(/\b(your application|application for|thank you|interview|update on|an update|opportunity|hello|hi)\b/gi, "")
-    .replace(/[-|–—]\s*(employment hero|linkedin|indeed|naukri|greenhouse).*/gi, "")
-    .replace(/\[.*?\]/g, "")   // remove [EH-48...] ticket refs
+    .replace(/^indeed\s+application[:\s]*/i, "")        // "Indeed Application: X" → "X"
+    .replace(/^linkedin\s+application[:\s]*/i, "")
+    .replace(/^naukri[:\s]*/i, "")
+    .replace(/^glassdoor[:\s]*/i, "")
+    .replace(/\b(your application(?: for)?|application for|thank you for applying|interview(?: invitation)?|update on|an update on your|opportunity at|hello|hi)\b/gi, "")
+    .replace(/[-|–—]\s*(?:employment hero|linkedin|indeed|naukri|greenhouse|lever)\b.*/gi, "")
+    .replace(/\[.*?\]/g, "")      // remove [EH-48...] ticket refs
+    .replace(/\(.*?\)/g, "")      // remove (Remote), (Contract) etc from role name
     .replace(/\s+/g, " ")
     .trim();
+
+  // Remove leading/trailing punctuation
+  cleaned = cleaned.replace(/^[-–—:,\s]+|[-–—:,\s]+$/g, "").trim();
 
   if (cleaned.length > 3) return cleaned.slice(0, 80);
 
@@ -225,6 +233,55 @@ function detectStatus(subject, body, from) {
   return null; // not a job email
 }
 
+// ── JUNK FILTER ───────────────────────────────────────────────────────────────
+function isJunkEmail(subject, body, from) {
+  const text = (subject + " " + body).toLowerCase();
+  const f = from.toLowerCase();
+
+  // Hard junk: banking, OTPs, shopping etc.
+  if (/otp|password reset|invoice|payment|transaction|imps|neft|bank alert|bill|receipt|order confirmed|shipment|delivery|unsubscribe from all/i.test(text)) {
+    return true;
+  }
+
+  // Forwarded emails
+  if (/^fwd:/i.test(subject)) return true;
+
+  // Job ALERT emails (not applications) — these are newsletters listing jobs
+  // Signals: multiple job listings, "view jobs", "jobs near you", "new jobs for you"
+  if (/new jobs for you|jobs near you|jobs matching|recommended jobs|top jobs|view \d+ jobs|see all jobs|\d+ new jobs|\bjob alert\b/i.test(text)) {
+    return true;
+  }
+
+  // Glassdoor/LinkedIn/Indeed digest/newsletter emails
+  if (/glassdoor.*(?:alert|digest|newsletter|weekly|daily)|your weekly|jobs you might like/i.test(text)) {
+    return true;
+  }
+
+  // Emails that are clearly NOT about the user's own application
+  // e.g. "X people applied", "Y candidates", "post a job", "job seeker"
+  if (/post a job|job seeker tips|career advice|salary report|people applied|candidates found|hire faster/i.test(text)) {
+    return true;
+  }
+
+  // Emails about someone else's role (not the user applying)
+  // e.g. "in Foreign MNC", "in Gurugram, Bengaluru" — these are recruiter blast emails
+  if (/in (?:foreign mnc|mnc|gurugram|bengaluru|mumbai|delhi|pune|hyderabad|chennai|bangalore)\s*[-,]/i.test(subject)) {
+    return true;
+  }
+
+  // Educational/exam emails falsely caught by "assessment" keyword
+  if (/grade \d+|school|nflat|olympiad|exam|entrance test|admission test|academic/i.test(text)) {
+    return true;
+  }
+
+  // Generic "data analytics" / "position" without job application context
+  if (/within their existing position|existing position|learn more about/i.test(text) && !/applied|application|interview|offer|rejected/i.test(text)) {
+    return true;
+  }
+
+  return false;
+}
+
 // ── MAIN PARSER ───────────────────────────────────────────────────────────────
 function parseJobEmail(headers, body = "") {
   const subject = headers["subject"] || "";
@@ -233,12 +290,7 @@ function parseJobEmail(headers, body = "") {
     ? new Date(headers["date"]).toISOString().slice(0, 10)
     : new Date().toISOString().slice(0, 10);
 
-  // Hard ignore list — never job emails
-  const fullText = (subject + " " + body).toLowerCase();
-  if (/otp|password|reset|invoice|payment|transaction|imps|neft|bank|bill|receipt|order confirmed|shipment|delivery|unsubscribe from all/i.test(fullText)) {
-    return null;
-  }
-  if (/^fwd:/i.test(subject)) return null;
+  if (isJunkEmail(subject, body, from)) return null;
 
   const status = detectStatus(subject, body, from);
   if (!status) return null;
