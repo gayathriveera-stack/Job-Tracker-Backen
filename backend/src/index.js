@@ -14,14 +14,14 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_KEY
 );
 
-// ── OAuth ─────────────────────────────────────────
+// ── OAuth ─────────────────────────
 const oauth2Client = new google.auth.OAuth2(
   process.env.GOOGLE_CLIENT_ID,
   process.env.GOOGLE_CLIENT_SECRET,
   process.env.GOOGLE_REDIRECT_URI
 );
 
-// ── AUTH ─────────────────────────────────────────
+// ── AUTH ─────────────────────────
 app.get("/auth/google", (req, res) => {
   const url = oauth2Client.generateAuthUrl({
     access_type: "offline",
@@ -73,7 +73,7 @@ app.get("/auth/callback", async (req, res) => {
   }
 });
 
-// ── CRUD ─────────────────────────────────────────
+// ── CRUD ─────────────────────────
 app.get("/applications/:userId", async (req, res) => {
   const { data } = await supabase
     .from("applications")
@@ -110,7 +110,7 @@ app.delete("/applications/:id", async (req, res) => {
   res.json({ success: true });
 });
 
-// ── SYNC ─────────────────────────────────────────
+// ── SYNC ─────────────────────────
 app.post("/sync/:userId", async (req, res) => {
   try {
     const { data: user } = await supabase
@@ -127,7 +127,7 @@ app.post("/sync/:userId", async (req, res) => {
   }
 });
 
-// ── EMAIL BODY EXTRACTOR ─────────────────────────
+// ── EMAIL BODY ───────────────────
 function getEmailBody(payload) {
   if (!payload) return "";
 
@@ -146,10 +146,35 @@ function getEmailBody(payload) {
   return "";
 }
 
-// ── PARSER ───────────────────────────────────────
+// ── COMPANY EXTRACTOR ────────────
+function extractCompany(from, subject) {
+  const domainMatch = from.match(/@([\w.-]+)/);
+
+  if (domainMatch) {
+    let domain = domainMatch[1];
+
+    domain = domain.replace(/^(mail|careers|jobs|apply|notifications)\./, "");
+
+    const name = domain.split(".")[0];
+
+    if (!["gmail", "yahoo", "outlook"].includes(name)) {
+      return name.charAt(0).toUpperCase() + name.slice(1);
+    }
+  }
+
+  const match = subject.match(/at ([A-Za-z\s]+)/i);
+  if (match) return match[1].trim();
+
+  return "Unknown";
+}
+
+// ── PARSER ──────────────────────
 function parseJobEmail(headers, body = "") {
   const subject = headers["subject"] || "";
   const from = headers["from"] || "";
+
+  // ❌ Remove duplicates
+  if (/^re:|^fwd:/i.test(subject)) return null;
 
   const text = (subject + " " + body).toLowerCase();
   const f = from.toLowerCase();
@@ -159,7 +184,7 @@ function parseJobEmail(headers, body = "") {
     return null;
   }
 
-  // ✅ Job signal (subject OR body)
+  // ✅ Job signal
   if (
     !(/application|applied|interview|assessment|candidate/i.test(text) ||
       /linkedin|indeed|naukri|greenhouse|lever|workday|employmenthero/i.test(f))
@@ -167,7 +192,7 @@ function parseJobEmail(headers, body = "") {
     return null;
   }
 
-  // ✅ Status detection
+  // ✅ Status
   let status = null;
 
   if (/applied|application received|received your application|thank you for applying/i.test(text)) {
@@ -183,20 +208,17 @@ function parseJobEmail(headers, body = "") {
     return null;
   }
 
-  // ✅ Company from domain
-  const domainMatch = from.match(/@([\w.-]+)/);
-  let company = "Unknown";
-
-  if (domainMatch) {
-    company = domainMatch[1].split(".")[0];
-    company = company.charAt(0).toUpperCase() + company.slice(1);
-  }
+  const company = extractCompany(from, subject);
 
   const date = headers["date"]
     ? new Date(headers["date"]).toISOString().slice(0, 10)
     : new Date().toISOString().slice(0, 10);
 
-  const role = subject.slice(0, 60);
+  const role = subject
+    .replace(/^re:|^fwd:/gi, "")
+    .replace(/application|interview|thank you/gi, "")
+    .trim()
+    .slice(0, 60);
 
   return {
     company,
@@ -207,7 +229,7 @@ function parseJobEmail(headers, body = "") {
   };
 }
 
-// ── GMAIL SCANNER ───────────────────────────────
+// ── SCANNER ─────────────────────
 async function scanGmailForUser(user) {
   const auth = new google.auth.OAuth2(
     process.env.GOOGLE_CLIENT_ID,
@@ -277,7 +299,7 @@ async function scanGmailForUser(user) {
   return count;
 }
 
-// ── CRON ────────────────────────────────────────
+// ── CRON ────────────────────────
 cron.schedule("0 */6 * * *", async () => {
   const { data: users } = await supabase.from("users").select("*");
 
@@ -286,6 +308,6 @@ cron.schedule("0 */6 * * *", async () => {
   }
 });
 
-// ── SERVER ──────────────────────────────────────
+// ── SERVER ──────────────────────
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => console.log(`Server running on ${PORT}`));
